@@ -1,220 +1,303 @@
 import nextcord
 from nextcord.ext import commands
-import asyncio
-import json
+from nextcord.ui import View, Button, Modal, TextInput, Select
 import os
-from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
 import textwrap
-
+import asyncio
 
 
 class NewsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        with open('trusted_users.json', 'r') as file:
-            self.trusted_users = {str(user_id) for user_id in json.load(file)}
+        self.trusted_users = ["393277554632425473", "741699144732901467", "739644334290239489", "958927704147759105"]  # Replace with actual trusted user IDs
 
-        if not os.path.exists("news_records/posts"):
-            os.makedirs("news_records/posts")
-        if not os.path.exists("news_records"):
-            os.makedirs("news_records")
-
-
-    
     @commands.command(name='news')
-    async def start_news_thread(self, ctx):
-        """Start a news thread for content creation."""
-        
-        # Check if the user is trusted
+    async def news(self, ctx):
+        """Start the news posting process."""
         if str(ctx.author.id) not in self.trusted_users:
             await ctx.send("You're not authorized to use this command!")
             return
 
-        # If user is trusted, then proceed to create the thread.
-        thread = await ctx.channel.create_thread(name="News Thread", type=nextcord.ChannelType.public_thread)
-        await ctx.send(f"News thread created! Head over to {thread.mention} to add content.")
+        view = NewsTypeView(self.bot)
+        await ctx.send("What kind of post would you like to make?", view=view)
 
 
-    
-    @commands.command(name='post')
-    async def post_news(self, ctx):
-        # Check if the user is trusted
-        if str(ctx.author.id) not in self.trusted_users:
-            await ctx.send("You're not authorized to use this command!")
-            return
+class NewsTypeView(View):
+    def __init__(self, bot):
+        super().__init__(timeout=3600)  # 1 hour timeout
+        self.bot = bot
+        self.add_item(TextPostButton(bot))
+        self.add_item(NewsSheetButton(bot))
 
-        # Check if command is invoked inside a thread
-        if not isinstance(ctx.message.channel, nextcord.Thread):
-            await ctx.send("This command should be executed within a news thread!")
-            return
 
-        # Prompt user for the channel
-        prompt_msg = await ctx.send("Please mention or name the channel where you'd like to post the news.")
+class TextPostButton(Button):
+    def __init__(self, bot):
+        super().__init__(label="Text", style=nextcord.ButtonStyle.primary)
+        self.bot = bot
 
-        def check_channel_message(m):
-            return m.author == ctx.author and m.channel == ctx.message.channel and m != ctx.message
+    async def callback(self, interaction: nextcord.Interaction):
+        await interaction.response.send_modal(TextPostModal(self.bot))
 
-        try:
-            msg = await self.bot.wait_for('message', check=check_channel_message, timeout=30)
-            channel_name_or_mention = msg.content.strip()
-            channel = nextcord.utils.get(ctx.guild.text_channels, name=channel_name_or_mention)
-            if channel is None:
-                # If not found by name, try converting mention to channel object
-                channel = await commands.TextChannelConverter().convert(ctx, channel_name_or_mention)
-        except asyncio.TimeoutError:
-            await ctx.send("You took too long to provide a channel!")
-            return
 
-        # Aggregate the content from the thread
-        content = ""
-        async for message in ctx.message.channel.history(oldest_first=True):
-            if message.id != ctx.message.id and message != prompt_msg and message.id != msg.id:
-                content += f"{message.content}\n\n"
+class NewsSheetButton(Button):
+    def __init__(self, bot):
+        super().__init__(label="News Sheet", style=nextcord.ButtonStyle.primary)
+        self.bot = bot
 
-        # Create an embed for the content
-        embed = nextcord.Embed(
-            title="News Update",
-            description="",
-            color=nextcord.Color.blue(),  # You can choose a color that fits your theme
-            timestamp=datetime.utcnow()
+    async def callback(self, interaction: nextcord.Interaction):
+        await interaction.response.send_modal(NewsSheetModal(self.bot))
+
+
+class TextPostModal(Modal):
+    def __init__(self, bot):
+        super().__init__(title="Create Text Post")
+        self.bot = bot
+        self.add_item(TextInput(label="Title", style=nextcord.TextInputStyle.short))
+        self.add_item(TextInput(label="Content", style=nextcord.TextInputStyle.paragraph))
+
+    async def callback(self, interaction: nextcord.Interaction):
+        title = self.children[0].value
+        content = self.children[1].value
+
+        # Request image upload or allow skipping
+        await interaction.response.send_message("Please upload image files for the post or click 'None' to skip.", ephemeral=True)
+        view = ImageUploadView(self.bot, interaction, title, content)
+        await interaction.followup.send("Upload your image files here or click 'None' to skip:", view=view, ephemeral=True)
+
+
+class NewsSheetModal(Modal):
+    def __init__(self, bot):
+        super().__init__(title="Create News Sheet")
+        self.bot = bot
+        self.add_item(TextInput(label="Title", style=nextcord.TextInputStyle.short))
+        self.add_item(TextInput(label="Content", style=nextcord.TextInputStyle.paragraph))
+
+    async def callback(self, interaction: nextcord.Interaction):
+        title = self.children[0].value
+        content = self.children[1].value
+
+        view = CategorySelectView(interaction, title, content, None, is_news_sheet=True)
+        await interaction.response.send_message("Select a category:", view=view, ephemeral=True)
+
+
+class ImageUploadView(View):
+    def __init__(self, bot, interaction, title, content):
+        super().__init__(timeout=3600)  # 1 hour timeout
+        self.bot = bot
+        self.interaction = interaction
+        self.title = title
+        self.content = content
+        self.image_urls = []  # List to store uploaded image URLs
+
+    @nextcord.ui.button(label="Upload Image(s)", style=nextcord.ButtonStyle.primary)
+    async def upload_images(self, button: nextcord.ui.Button, interaction: nextcord.Interaction):
+        # Prompt the user to upload images
+        await interaction.response.send_message(
+            "Please upload one or more image files in this channel. Type `done` when finished.", ephemeral=True
         )
 
-        # Check if content fits in one embed, and add it
-        if len(content) <= 4096:
-            embed.description = content
-        else:
-            # Handle the case where content is too long
-            embed.description = content[:4093] + "..."  # Truncate and indicate continuation
-            # Here, you may want to send additional embeds or provide a link to the full content
+        def check(m):
+            return (
+                m.author == interaction.user
+                and m.channel == interaction.channel
+                and (m.attachments or m.content.lower() == "done")
+            )
 
-        # Send the embed to the specified channel
-        await channel.send(embed=embed)
+        while True:
+            try:
+                message = await self.bot.wait_for("message", timeout=300, check=check)  # 5-minute timeout
 
-        # Optionally, delete the thread
-        await ctx.message.channel.delete()
+                # Stop collecting images if the user types 'done'
+                if message.content.lower() == "done":
+                    if not self.image_urls:
+                        await interaction.followup.send("No images uploaded. Please restart the process if needed.", ephemeral=True)
+                        return
+                    break
 
+                # Check and add valid image attachments
+                for attachment in message.attachments:
+                    if attachment.content_type and "image" in attachment.content_type:
+                        self.image_urls.append(attachment.url)
+                    else:
+                        await interaction.followup.send(
+                            f"File `{attachment.filename}` is not a valid image. Skipping it.", ephemeral=True
+                        )
 
-
-
-
-
-    @commands.command(name='postimg')
-    async def post_img_news(self, ctx):
-        """Post the content of a news thread onto an image and then to a specified channel."""
-        # Check if the user is trusted
-        if str(ctx.author.id) not in self.trusted_users:
-            await ctx.send("You're not authorized to use this command!")
-            return
-
-        # Check if command is invoked inside a thread
-        if not isinstance(ctx.message.channel, nextcord.Thread):
-            await ctx.send("This command should be executed within a news thread!")
-            return
-
-        # Prompt user for the channel
-        prompt_msg = await ctx.send("Please mention or name the channel where you'd like to post the news.")
-        def check_channel_message(m):
-            return m.author == ctx.author and m.channel == ctx.message.channel and m != ctx.message
-
-        try:
-            msg = await self.bot.wait_for('message', check=check_channel_message, timeout=30)
-            channel_name_or_mention = msg.content.strip()
-            channel = nextcord.utils.get(ctx.guild.text_channels, name=channel_name_or_mention)
-            if channel is None:
-                channel = await commands.TextChannelConverter().convert(ctx, channel_name_or_mention)
-        except asyncio.TimeoutError:
-            await ctx.send("You took too long to provide a channel!")
-            return
-
-        # Aggregate the content from the thread
-        content = ""
-        async for message in ctx.message.channel.history(oldest_first=True):
-            if message.id != ctx.message.id and message != prompt_msg and message.id != msg.id:
-                content += f"{message.content}\n\n"
-
-        # Define text wrapping and image creation function with dynamic font size
-        # ... (other code)
-
-        def create_news_images(content, template_path):
-            current_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            font_path = "news_records/font/open-sans/OpenSans-Regular.ttf" # Update to your actual font path
-
-            # We start by establishing the character limit for each line and the line limit for each page
-            max_chars_per_line = 65
-            max_lines_per_page = 20
-
-            # Create font object with a base size
-            base_font_size = 30  # Start with a base font size
-
-            # Now we prepare the content by separating it into messages and then wrapping each message
-            messages = content.strip().split('\n\n')  # Separate content into messages
-
-            # Wrap each message separately to maintain the gap between messages
-            wrapped_lines = []
-            for message in messages:
-                # Wrap this message and add it to the list
-                wrapped_lines.extend(textwrap.wrap(message, width=max_chars_per_line))
-                wrapped_lines.append('')  # Add a space after each message for clarity
-
-            # Now, split the wrapped lines into pages
-            pages = [wrapped_lines[i:i + max_lines_per_page] for i in range(0, len(wrapped_lines), max_lines_per_page)]
-
-            image_paths = []
-            for page_num, page in enumerate(pages, start=1):
-                with Image.open(template_path) as image:
-                    draw = ImageDraw.Draw(image)
-                    font = ImageFont.truetype(font_path, base_font_size)
-                    x, y = 70, 190
-                    y_increment = base_font_size + 3  # Adjust line spacing based on font size
-
-                    for line in page:
-                        draw.text((x, y), line, fill="black", font=font)
-                        y += y_increment  # Increment y position for each line
-
-                    # Save each page as an image
-                    saved_image_path = f"news_records/pages/news_page_{page_num}_{current_time}.png"
-                    image.save(saved_image_path)
-                    image_paths.append(saved_image_path)
-
-            return image_paths
-
-        # ... (other code)
-
-
-        # Generate and preview the images
-        image_paths = create_news_images(content, "news_records/template/template_image.png")
-
-        # Send a preview of all images
-        preview_messages = []  # List to keep track of all preview messages sent
-        for img_path in image_paths:
-            with open(img_path, "rb") as img_file:
-                preview_message = await ctx.send(file=nextcord.File(img_file, filename=os.path.basename(img_path)))
-                preview_messages.append(preview_message)  # Add the message to the list
-
-
-        confirm_msg = await ctx.send("Do you want to post this image to the selected channel? Reply with 'yes' to confirm.")
-        def check_confirm_message(m):
-            return m.author == ctx.author and m.channel == ctx.message.channel
-
-        try:
-            confirm_response = await self.bot.wait_for('message', check=check_confirm_message, timeout=30)
-            if confirm_response.content.lower() != 'yes':
-                await ctx.send("Image posting cancelled.")
+            except asyncio.TimeoutError:
+                await interaction.followup.send("You didn't upload images in time. Please restart the process.", ephemeral=True)
                 return
-        except asyncio.TimeoutError:
-            await ctx.send("Confirmation not received in time. Image posting cancelled.")
-            return
 
-        # Post the images to the specified channel
-        for img_path in image_paths:
-            with open(img_path, "rb") as img_file:
-                await channel.send(file=nextcord.File(img_file, filename=os.path.basename(img_path)))
+        # Proceed to category selection after collecting images
+        view = CategorySelectView(self.interaction, self.title, self.content, self.image_urls)
+        await interaction.followup.send("Images uploaded! Select a category:", view=view, ephemeral=True)
 
-        # Delete the thread after posting
-        await ctx.message.channel.delete()
+    @nextcord.ui.button(label="None", style=nextcord.ButtonStyle.secondary)
+    async def skip_images(self, button: nextcord.ui.Button, interaction: nextcord.Interaction):
+        # Skip image upload and proceed to category selection
+        view = CategorySelectView(self.interaction, self.title, self.content, None)
+        await interaction.response.send_message("No images selected. Select a category:", view=view, ephemeral=True)
 
-   
 
-def setup(client):
-    client.add_cog(NewsCog(client))
+class CategorySelectView(View):
+    def __init__(self, interaction, title, content, image_urls=None, is_news_sheet=False):
+        super().__init__(timeout=3600)  # 1 hour timeout
+        self.interaction = interaction
+        self.title = title
+        self.content = content
+        self.image_urls = image_urls
+        self.is_news_sheet = is_news_sheet
+        self.category_id = None
+
+        self.add_item(CategorySelect(interaction))
+        self.add_item(CancelButton())
+
+
+class CategorySelect(Select):
+    def __init__(self, interaction):
+        self.interaction = interaction
+        categories = interaction.guild.categories
+        options = [nextcord.SelectOption(label=category.name, value=str(category.id)) for category in categories]
+        super().__init__(placeholder="Select a category...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: nextcord.Interaction):
+        self.view.category_id = int(self.values[0])
+        view = ChannelSelectView(self.view.interaction, self.view.title, self.view.content, self.view.image_urls, self.view.is_news_sheet, self.view.category_id)
+        await interaction.response.edit_message(content="Select a channel:", view=view)
+
+
+class ChannelSelectView(View):
+    def __init__(self, interaction, title, content, image_urls=None, is_news_sheet=False, category_id=None):
+        super().__init__(timeout=3600)  # 1 hour timeout
+        self.interaction = interaction
+        self.title = title
+        self.content = content
+        self.image_urls = image_urls
+        self.is_news_sheet = is_news_sheet
+        self.category_id = category_id
+        self.channel_id = None
+
+        self.update_select_menu()
+
+    def update_select_menu(self):
+        self.clear_items()
+        self.add_item(ChannelSelect(self.interaction, self.category_id))
+        self.add_item(CancelButton())
+        self.add_item(OkButton())
+
+    def create_news_sheet(self, title, content):
+        # Load the newspaper template
+        template_path = "/Users/a/Desktop/bots/news_records/template/template_image.png"  # Replace with your template path
+        image = Image.open(template_path)
+        draw = ImageDraw.Draw(image)
+
+        # Load fonts
+        font_title = ImageFont.truetype("/Users/a/Desktop/bots/news_records/font/open-sans/OpenSans-BoldItalic.ttf", 24)  # Replace with your font path
+        base_font_size = 20
+
+        # Image dimensions
+        image_width, image_height = image.size
+
+        # Adjust the title positioning below the header
+        header_offset = 180  # Adjust this value based on the header height in the template
+        title_bbox = font_title.getbbox(title)  # Get bounding box of the title
+        title_width = title_bbox[2] - title_bbox[0]
+        title_x = (image_width - title_width) // 2
+        draw.text((title_x, header_offset), title, font=font_title, fill="black")  # Draw the title
+
+        # Calculate dynamic font size based on content length
+        max_chars = 4000
+        content_length = len(content)
+        if content_length > max_chars:
+            font_size = max(5, int(base_font_size * (max_chars / content_length)))
+        else:
+            font_size = base_font_size
+
+        font_content = ImageFont.truetype("/Users/a/Desktop/bots/news_records/font/open-sans/OpenSans-Regular.ttf", font_size)
+
+        # Format content as a single block
+        margin = 50
+        content_y_start = header_offset + 50  # Start content below the title
+        line_spacing = 5
+
+        # Split content into paragraphs based on double newlines
+        paragraphs = content.split("\n\n")
+        current_y = content_y_start
+
+        for paragraph in paragraphs:
+            wrapped_text = textwrap.fill(paragraph, width=110)  # Adjust width to fit the wider page
+            for line in wrapped_text.split("\n"):
+                line_bbox = font_content.getbbox(line)  # Get bounding box of each line
+                line_height = line_bbox[3] - line_bbox[1]
+                if current_y + line_height > image_height - 50:  # Stop if out of space
+                    break
+                draw.text((margin, current_y), line, font=font_content, fill="black")
+                current_y += line_height + line_spacing
+            current_y += line_spacing * 2  # Add spacing after each paragraph
+
+        # Save the image
+        output_path = f"news_records/posts/{title.replace(' ', '_')}.png"
+        image.save(output_path)
+        return output_path
+
+
+class ChannelSelect(Select):
+    def __init__(self, interaction, category_id):
+        self.interaction = interaction
+        category = nextcord.utils.get(interaction.guild.categories, id=category_id)
+        channels = category.text_channels
+        options = [nextcord.SelectOption(label=channel.name, value=str(channel.id)) for channel in channels]
+        super().__init__(placeholder="Select a channel...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: nextcord.Interaction):
+        self.view.channel_id = int(self.values[0])
+        await interaction.response.send_message(f"Selected channel: <#{self.view.channel_id}>", ephemeral=True)
+
+
+class CancelButton(Button):
+    def __init__(self):
+        super().__init__(label="Cancel", style=nextcord.ButtonStyle.danger)
+
+    async def callback(self, interaction: nextcord.Interaction):
+        await interaction.response.send_message("News posting cancelled.", ephemeral=True)
+        self.view.stop()
+
+
+class OkButton(Button):
+    def __init__(self):
+        super().__init__(label="OK", style=nextcord.ButtonStyle.success)
+
+    async def callback(self, interaction: nextcord.Interaction):
+        await interaction.response.defer(ephemeral=True)  # Defer the interaction to avoid timeout
+        channel = self.view.interaction.guild.get_channel(self.view.channel_id)
+        if self.view.is_news_sheet:
+            image_path = self.view.create_news_sheet(self.view.title, self.view.content)
+            try:
+                await channel.send(file=nextcord.File(image_path))
+            except Exception as e:
+                await interaction.followup.send(f"Failed to send image: {e}", ephemeral=True)
+                return
+            finally:
+                if os.path.exists(image_path):
+                    os.remove(image_path)
+        else:
+            embed = nextcord.Embed(title=self.view.title, description=self.view.content, color=0x00ff00)
+            await channel.send(embed=embed)  # Send the main post content first
+
+            if self.view.image_urls:
+                for image_url in self.view.image_urls:
+                    try:
+                        image_embed = nextcord.Embed()
+                        image_embed.set_image(url=image_url)
+                        await channel.send(embed=image_embed)
+                    except Exception as e:
+                        await interaction.followup.send(f"Failed to attach image: {e}", ephemeral=True)
+                        continue
+
+        await interaction.followup.send("News posted successfully!", ephemeral=True)
+        self.view.stop()
+
+
+
+def setup(bot):
+    bot.add_cog(NewsCog(bot))
