@@ -10,7 +10,7 @@ import asyncio
 class NewsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.trusted_users = ["393277554632425473", "741699144732901467", "739644334290239489", "958927704147759105"]  # Replace with actual trusted user IDs
+        self.trusted_users = ["your user id here"]  # Replace with actual trusted user IDs
 
     @commands.command(name='news')
     async def news(self, ctx):
@@ -187,12 +187,12 @@ class ChannelSelectView(View):
 
     def create_news_sheet(self, title, content):
         # Load the newspaper template
-        template_path = "/Users/a/Desktop/bots/news_records/template/template_image.png"  # Replace with your template path
+        template_path = "/Users/Desktop/bots/news_records/template/template_image.png"  # Replace with your template path
         image = Image.open(template_path)
         draw = ImageDraw.Draw(image)
 
         # Load fonts
-        font_title = ImageFont.truetype("/Users/a/Desktop/bots/news_records/font/open-sans/OpenSans-BoldItalic.ttf", 24)  # Replace with your font path
+        font_title = ImageFont.truetype("/Users/Desktop/bots/news_records/font/open-sans/OpenSans-BoldItalic.ttf", 24)  # Replace with your font path
         base_font_size = 20
 
         # Image dimensions
@@ -213,7 +213,7 @@ class ChannelSelectView(View):
         else:
             font_size = base_font_size
 
-        font_content = ImageFont.truetype("/Users/a/Desktop/bots/news_records/font/open-sans/OpenSans-Regular.ttf", font_size)
+        font_content = ImageFont.truetype("/Users/Desktop/bots/news_records/font/open-sans/OpenSans-Regular.ttf", font_size) #Your font path here
 
         # Format content as a single block
         margin = 50
